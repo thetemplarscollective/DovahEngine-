@@ -212,3 +212,15 @@ order after 0001. The chain was verified 2026-11-16: applying
 `player.rs` byte-for-byte; 0007 was verified separately against
 the pre-0007 vendored files (all three touched files reproduce
 byte-for-byte).)
+
+## GitHub mirror note
+
+The GitHub copy of this tree carries every UTF-8 source file, but not the
+7,541 binary files (133 MB), because the push route is text-only. Only one
+of those binaries matters for building: `core/assets/notosans.subset.ttf.gz`
+(the fallback device font embedded by `core/src/player.rs`). After cloning,
+run `sh restore-binaries.sh` in this directory to fetch it from upstream
+at the pinned commit with its SHA-256 verified. The rest of the binaries
+are Ruffle's own test data (test movies, images, audio) -- needed only to
+run Ruffle's test suite, not to build Dovahengine. The complete tree
+including all binaries is in the with-vendor source ZIP.
