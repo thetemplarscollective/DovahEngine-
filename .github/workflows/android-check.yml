@@ -1,0 +1,81 @@
+# Android compile check for DovahEngine.
+#
+# Runs `cargo check` over the whole workspace for aarch64-linux-android,
+# the same target the APK uses. This is the fast gate: it surfaces real
+# compiler errors without packaging an APK (no aapt, no signing, no keystore).
+#
+# What it needs and why:
+# - The Ruffle fallback font (vendor/ruffle/core/assets/notosans.subset.ttf.gz)
+#   is NOT in this repo (binary files can't travel through the text-only push
+#   route). restore-binaries.sh fetches it from upstream ruffle-rs/ruffle at
+#   the pinned v0.7.1 commit and verifies its SHA-256. Without it ruffle_core
+#   does not compile (core/src/player.rs embeds it).
+# - The Android NDK r27c provides the aarch64 clang cc-rs needs (blake3's
+#   build script is the first to fail without it).
+# - Rust 1.100.0 matches the toolchain the engine is developed with locally.
+#
+# The full APK build (cargo apk) is a later step: it also needs the launcher
+# icons (android_res/) and touch UI art (assets/), which are binary PNGs not
+# yet in the repo.
+
+name: Android check
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: android-check-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    name: cargo check (aarch64-linux-android)
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    env:
+      ANDROID_NDK_VERSION: "27.2.12479018"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Restore Ruffle fallback font
+        run: sh vendor/ruffle/restore-binaries.sh
+
+      - name: Install Rust 1.100.0
+        uses: dtolnay/rust-toolchain@v1
+        with:
+          toolchain: 1.100.0
+          targets: aarch64-linux-android
+
+      - name: Install Android NDK r27c
+        run: |
+          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses >/dev/null
+          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "ndk;$ANDROID_NDK_VERSION"
+          echo "ANDROID_NDK_ROOT=$ANDROID_HOME/ndk/$ANDROID_NDK_VERSION" >> "$GITHUB_ENV"
+          echo "$ANDROID_HOME/ndk/$ANDROID_NDK_VERSION/toolchains/llvm/prebuilt/linux-x86_64/bin" >> "$GITHUB_PATH"
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: android-check
+
+      - name: Check Android target
+        env:
+          CC_aarch64_linux_android: aarch64-linux-android26-clang
+          CXX_aarch64_linux_android: aarch64-linux-android26-clang++
+          AR_aarch64_linux_android: llvm-ar
+        run: |
+          set -o pipefail
+          cargo check --workspace --target aarch64-linux-android --locked 2>&1 | tee check.log
+
+      - name: Upload check log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-check-log
+          path: check.log
+          retention-days: 30
