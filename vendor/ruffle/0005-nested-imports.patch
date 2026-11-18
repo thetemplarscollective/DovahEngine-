@@ -1,0 +1,247 @@
+--- a/core/src/loader.rs
++++ b/core/src/loader.rs
+@@ -46,8 +46,11 @@
+ use ruffle_render::utils::{JpegTagFormat, determine_jpeg_tag_format};
+ use slotmap::{SlotMap, new_key_type};
+ use std::fmt;
++use std::future::Future;
++use std::pin::Pin;
+ use std::str::FromStr;
+ use std::sync::{Arc, Mutex, MutexGuard};
++use std::task::{Context, Poll};
+ use std::time::Duration;
+ use swf::read::{extract_swz, read_compression_type};
+ use thiserror::Error;
+@@ -216,6 +219,30 @@
+     }
+ }
+ 
++/// A future that yields once to the executor, letting other
++/// spawned futures run before this future is polled again.
++/// Hand-rolled so the loader needs no new dependency on any target
++/// (notably wasm, where the `futures` crate is unavailable): the
++/// waker re-queues this future behind the other ready tasks, which
++/// is exactly how a nested import load gets its turn while
++/// `load_asset_movie` waits for it.
++#[derive(Default)]
++struct YieldOnce(bool);
++
++impl Future for YieldOnce {
++    type Output = ();
++
++    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
++        if self.0 {
++            Poll::Ready(())
++        } else {
++            self.0 = true;
++            cx.waker().wake_by_ref();
++            Poll::Pending
++        }
++    }
++}
++
+ /// Holds all in-progress loads for the player.
+ #[derive(Collect)]
+ #[collect(no_drop)]
+@@ -348,46 +375,102 @@
+                     let content_type = ContentType::sniff(&body);
+                     tracing::info!("Loading imported movie: {:?}", url);
+ 
+-                    player.lock().unwrap().mutate_with_update_context(|uc| {
++                    if !matches!(content_type, ContentType::Swf) {
++                        tracing::warn!(
++                            "Unsupported content type for ImportAssets: {:?}",
++                            content_type
++                        );
++                        // A non-SWF import can never provide assets,
++                        // but the importer must not wait forever.
++                        player.lock().unwrap().mutate_with_update_context(|uc| {
++                            importer_movie.fetch(uc).finish_importing();
++                        });
++                        return Ok(());
++                    }
++
++                    let movie = SwfMovie::from_data(&body, url.clone(), Some(url.clone()), None)
++                        .expect("Could not load movie");
++                    let movie = Arc::new(movie);
++
++                    // Create the import clip and stash a handle to
++                    // it: the preload loop below awaits between
++                    // attempts, and a `MovieClip<'gc>` cannot be
++                    // held across an await.
++                    let clip = player.lock().unwrap().mutate_with_update_context(|uc| {
+                         let importer_movie = importer_movie.fetch(uc);
++                        let clip = MovieClip::new_import_assets(uc, movie, importer_movie);
++                        clip.set_cur_preload_frame(0);
++                        // Create library for exports before preloading
++                        uc.library.library_for_movie_mut(clip.movie());
++                        MovieClipHandle::stash(uc, clip)
++                    });
+ 
+-                        if matches!(content_type, ContentType::Swf) {
+-                            let movie =
+-                                SwfMovie::from_data(&body, url.clone(), Some(url.clone()), None)
+-                                    .expect("Could not load movie");
+-
+-                            let movie = Arc::new(movie);
+-
+-                            let clip = MovieClip::new_import_assets(uc, movie, importer_movie);
++                    tracing::debug!("Preloading swf to run exports {:?}", url);
+ 
+-                            clip.set_cur_preload_frame(0);
++                    // Preload the imported movie to completion,
++                    // resuming after each nested import. A single
++                    // preload stops at the first ImportAssets tag,
++                    // so a component that imports fonts before its
++                    // own exports would never register them, and
++                    // the importer would fail to instantiate the
++                    // component (ruffle#22426). Each nested import
++                    // runs as its own spawned future and clears
++                    // this clip's awaiting-import flag when it
++                    // resolves; yielding lets the executor run it.
++                    // The resume cap is only a guard against an
++                    // import that never resolves: with the
++                    // error-path `finish_importing` below, every
++                    // nested import resolves one way or the other.
++                    let mut resumes = 0;
++                    let preload_done = loop {
++                        let done = player.lock().unwrap().mutate_with_update_context(|uc| {
++                            let clip = clip.fetch(uc);
+                             let mut execution_limit = ExecutionLimit::none();
+-
+-                            tracing::debug!("Preloading swf to run exports {:?}", url);
+-
+-                            // Create library for exports before preloading
+-                            uc.library.library_for_movie_mut(clip.movie());
+-                            let res = clip.preload(uc, &mut execution_limit);
+-                            tracing::debug!(
+-                                "Preloaded swf to run exports result {:?} {}",
+-                                url,
+-                                res
+-                            );
+-                        } else {
++                            clip.preload(uc, &mut execution_limit)
++                        });
++                        if done {
++                            break true;
++                        }
++                        resumes += 1;
++                        if resumes > 10_000 {
+                             tracing::warn!(
+-                                "Unsupported content type for ImportAssets: {:?}",
+-                                content_type
++                                "Giving up preloading swf after 10,000 resumes: {:?}",
++                                url
+                             );
++                            break false;
+                         }
++                        tracing::debug!(
++                            "Preload of swf {:?} paused for a nested import (resume {})",
++                            url,
++                            resumes
++                        );
++                        YieldOnce::default().await;
++                    };
++                    tracing::debug!(
++                        "Preloaded swf to run exports result {:?} {}",
++                        url,
++                        preload_done
++                    );
+ 
+-                        importer_movie.finish_importing();
++                    player.lock().unwrap().mutate_with_update_context(|uc| {
++                        importer_movie.fetch(uc).finish_importing();
+                     });
+                     Ok(())
+                 }
+-                Err(e) => Err(Error::FetchError(format!(
+-                    "Could not fetch: {:?} because {:?}",
+-                    e.url, e.error
+-                ))),
++                Err(e) => {
++                    // A failed import must still clear the
++                    // importer's wait: otherwise the importer sits
++                    // in preload forever and its frame 1 never
++                    // runs (a single failed component import used
++                    // to wedge the whole menu).
++                    player.lock().unwrap().mutate_with_update_context(|uc| {
++                        importer_movie.fetch(uc).finish_importing();
++                    });
++                    Err(Error::FetchError(format!(
++                        "Could not fetch: {:?} because {:?}",
++                        e.url, e.error
++                    )))
++                }
+             }
+         })
+     }
+--- a/core/src/library.rs
++++ b/core/src/library.rs
+@@ -161,6 +161,28 @@
+         }
+     }
+ 
++    /// Registers a character, replacing any character already
++    /// registered under the ID. Used when an imported asset arrives
++    /// for an ID that `import_exports_of_importer` already occupied
++    /// with one of the importer's exports: the import reservation is
++    /// authoritative — the importer explicitly asked for this asset
++    /// at this ID — while the importer's exports are only a fallback
++    /// namespace for the imported clip. In a valid SWF the ID cannot
++    /// also be one of the clip's own definitions (character IDs are
++    /// unique per movie), so the displaced character is always
++    /// either a copied export or a previous registration of the same
++    /// import. Returns the displaced character, if any.
++    pub fn register_character_overwrite(
++        &mut self,
++        id: CharacterId,
++        character: Character<'gc>,
++    ) -> Option<Character<'gc>> {
++        if let Character::Font(font) = character {
++            self.fonts.register(font);
++        }
++        self.characters.insert(id, character)
++    }
++
+     /// Registers an export name for a given character ID.
+     /// This character will then be instantiable from AVM1.
+     pub fn register_export(&mut self, id: CharacterId, export_name: AvmString<'gc>) {
+--- a/core/src/display_object/movie_clip.rs
++++ b/core/src/display_object/movie_clip.rs
+@@ -600,9 +600,18 @@
+                 || !result.unwrap_or_default()
+                 || reader.get_ref().is_empty());
+ 
+-        shared.import_exports_of_importer(context);
+-
+         if is_finished {
++            // Only import the importer's exports once this clip is
++            // fully preloaded: copying them earlier occupies
++            // character IDs this clip's own later definitions (or
++            // its still-pending imports) need, and those
++            // definitions then fail to register with a collision
++            // (Skyrim's inventory-menu components lost dozens of
++            // shapes this way). The copied exports are only ever
++            // looked up by name at runtime, which cannot happen
++            // before preload completes anyway.
++            shared.import_exports_of_importer(context);
++
+             if progress.cur_preload_frame.get() == 1 {
+                 // If this clip did not have any show frame tags,
+                 // treat the end-of-clip as a ShowFrame
+@@ -4098,7 +4107,14 @@
+                     let parent_library = context.library.library_for_movie_mut(parent.clone());
+ 
+                     if let Some(id) = parent_library.character_id_by_import_name(&name) {
+-                        parent_library.register_character(id, character);
++                        // The import wins over whatever already sits
++                        // at this ID: `import_exports_of_importer`
++                        // may have copied one of the importer's own
++                        // exports here first, and a plain register
++                        // would fail with a collision — the imported
++                        // asset (often a font the component's text
++                        // needs) would never arrive.
++                        parent_library.register_character_overwrite(id, character);
+ 
+                         Self::register_export(context, id, name, parent.clone());
+                         tracing::debug!(

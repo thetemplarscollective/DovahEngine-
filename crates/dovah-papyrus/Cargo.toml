@@ -1,0 +1,10 @@
+[package]
+name = "dovah-papyrus"
+version = "0.1.0"
+edition = "2021"
+description = "Papyrus script runtime for Dovahengine (Skyrim Special Edition)"
+license = "GPL-3.0-or-later"
+
+[dependencies]
+dovah-esm = { path = "../dovah-esm" }
+dovah-pex = { path = "../dovah-pex" }

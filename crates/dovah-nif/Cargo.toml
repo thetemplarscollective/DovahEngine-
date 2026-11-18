@@ -1,0 +1,12 @@
+[package]
+name = "dovah-nif"
+version = "0.1.0"
+edition = "2021"
+description = "NIF mesh loader for Dovahengine (Skyrim Special Edition)"
+license = "GPL-3.0-or-later"
+
+[dependencies]
+
+[dev-dependencies]
+# Only for the nif_sweep example (real-data check over the Meshes BSAs).
+dovah-bsa = { path = "../dovah-bsa" }

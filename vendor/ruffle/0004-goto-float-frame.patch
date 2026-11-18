@@ -1,0 +1,24 @@
+--- a/core/src/avm1/globals/movie_clip.rs
++++ b/core/src/avm1/globals/movie_clip.rs
+@@ -1120,8 +1120,19 @@
+     let mut call_frame = None;
+ 
+     match args.get(0).cloned().unwrap_or(Value::Undefined) {
+-        // A direct goto only runs if n is an integer
+-        Value::Number(n) if n.fract() == 0.0 => {
++        // DOVAHENGINE PATCH (M2): accept non-integer frame numbers
++        // and truncate them, as Flash/Scaleform do. Stock Ruffle
++        // only ran a direct goto `if n.fract() == 0.0`; a float fell
++        // through to the label branch, where the stringified number
++        // ("6.97") fails path resolution and the goto silently does
++        // nothing. Skyrim's HUD `Meter.Update` passes raw `Lerp`
++        // floats to `gotoAndStop` (only `SetPercent` floors), so
++        // under stock Ruffle the bars tween their percents correctly
++        // but the bar clip never moves off its Full frame. Truncation
++        // is the ECMA ToInt32 conversion (`f64_to_wrapping_i32`),
++        // which is what Flash does; NaN/inf/negatives still no-op
++        // via the `frame > 0` check below.
++        Value::Number(n) => {
+             // Frame #
+             // Gotoing <= 0 has no effect.
+             // Gotoing greater than _totalframes jumps to the last frame.

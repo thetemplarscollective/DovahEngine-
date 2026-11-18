@@ -1,0 +1,44 @@
+# Build output
+target/
+
+# Bethesda game data — NEVER commit. The engine reads it at runtime from the
+# player's own legally owned copy of Skyrim SE.
+test-data/
+
+# Vendored Ruffle checkout (4+ GB). Only our patches + the README are tracked.
+vendor/ruffle/*
+!vendor/ruffle/*.patch
+!vendor/ruffle/README-DOVAHENGINE.md
+# vendor/bevy_pbr IS tracked, except its binary textures.
+vendor/bevy_pbr/**/*.ktx2
+vendor/bevy_pbr/**/*.png
+
+# Reference material, recordings, renders, study output
+references/
+gameplay/
+screenshots/
+interface-extract/
+trailer/
+roadmap/
+website-shots/
+tint_tex/
+work-m12/
+assets/
+perf-harness-out/
+
+# Binary art — not tracked via the text-only snapshot connector.
+# Add these through the GitHub web UI if the repo needs them.
+crates/dovah-app/assets/ui/*.png
+crates/dovah-app/icon.png
+crates/dovah-app/android_res/**/*.png
+
+# Logs, archives, installers, video
+*.log
+*.apk
+*.zip
+*.mp4
+*.gif
+
+# Snapshot sync metadata (lives beside the repo, never inside it)
+*.muse-github-snapshot-sync.json
+*.muse-github-snapshot-sync.json.tmp-*

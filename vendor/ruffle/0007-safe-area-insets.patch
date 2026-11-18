@@ -1,0 +1,88 @@
+--- a/core/src/display_object/stage.rs
++++ b/core/src/display_object/stage.rs
+@@ -113,6 +113,11 @@
+     /// The dimensions of the stage, as reported to ActionScript.
+     stage_size: Cell<(u32, u32)>,
+ 
++    /// Safe-area insets in pixels: (left, top, right, bottom).
++    /// Narrows `Stage.safeRect` for notches and gesture bars; zero
++    /// means the whole stage is safe. Dovahengine patch 0007.
++    safe_area_insets: Cell<(u32, u32, u32, u32)>,
++
+     /// The scale mode of the stage.
+     scale_mode: Cell<StageScaleMode>,
+ 
+@@ -167,6 +172,7 @@
+                 quality: Default::default(),
+                 // This is updated in `build_matrices`
+                 stage_size: Cell::new((0, 0)),
++                safe_area_insets: Cell::new((0, 0, 0, 0)),
+                 scale_mode: Default::default(),
+                 forced_scale_mode: Cell::new(false),
+                 display_state: Cell::new(if fullscreen {
+@@ -311,6 +317,17 @@
+         self.0.stage_size.get()
+     }
+ 
++    /// Safe-area insets in pixels: (left, top, right, bottom).
++    /// Dovahengine patch 0007.
++    pub fn safe_area_insets(self) -> (u32, u32, u32, u32) {
++        self.0.safe_area_insets.get()
++    }
++
++    /// Set the safe-area insets. Dovahengine patch 0007.
++    pub fn set_safe_area_insets(self, insets: (u32, u32, u32, u32)) {
++        self.0.safe_area_insets.set(insets);
++    }
++
+     /// Get the stage mode.
+     /// This controls how the content scales to fill the viewport.
+     pub fn scale_mode(self) -> StageScaleMode {
+--- a/core/src/avm1/globals/stage.rs
++++ b/core/src/avm1/globals/stage.rs
+@@ -227,6 +227,22 @@
+     _this: Object<'gc>,
+     _args: &[Value<'gc>],
+ ) -> Result<Value<'gc>, Error<'gc>> {
+-    // No safe-area inset: the whole stage is safe.
+-    visible_rect(activation, _this, _args)
++    // The safe rect is the stage rect minus the host's safe-area
++    // insets (notch/gesture bar — Dovahengine patch 0007), clamped
++    // so it never inverts. Zero insets (desktop) = the full stage.
++    let (width, height) = activation.context.stage.stage_size();
++    let (left, top, right, bottom) = activation.context.stage.safe_area_insets();
++    let x_min = left.min(width);
++    let y_min = top.min(height);
++    let x_max = width.saturating_sub(right).max(x_min);
++    let y_max = height.saturating_sub(bottom).max(y_min);
++    new_rectangle(
++        activation,
++        Rectangle {
++            x_min: Twips::from_pixels_i32(x_min as i32),
++            x_max: Twips::from_pixels_i32(x_max as i32),
++            y_min: Twips::from_pixels_i32(y_min as i32),
++            y_max: Twips::from_pixels_i32(y_max as i32),
++        },
++    )
+ }
+--- a/core/src/player.rs
++++ b/core/src/player.rs
+@@ -1020,6 +1020,18 @@
+         })
+     }
+ 
++    /// Set the safe-area insets (Dovahengine patch 0007): pixels of
++    /// notch/gesture-bar inset on each edge, narrowing
++    /// `Stage.safeRect`. The HUD anchors its elements to the safe
++    /// rect, so this keeps them clear of the phone's notch.
++    pub fn set_safe_area_insets(&mut self, left: u32, top: u32, right: u32, bottom: u32) {
++        self.mutate_with_update_context(|context| {
++            context
++                .stage
++                .set_safe_area_insets((left, top, right, bottom));
++        })
++    }
++
+     pub fn scale_mode(&mut self) -> StageScaleMode {
+         self.mutate_with_update_context(|context| context.stage.scale_mode())
+     }

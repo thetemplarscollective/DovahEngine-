@@ -1,0 +1,10 @@
+[package]
+name = "dovah-strings"
+version = "0.1.0"
+edition = "2021"
+description = "Skyrim SE localized strings (.STRINGS/.DLSTRINGS/.ILSTRINGS) reader for Dovahengine"
+
+[dependencies]
+
+[dev-dependencies]
+dovah-esm = { path = "../dovah-esm" }

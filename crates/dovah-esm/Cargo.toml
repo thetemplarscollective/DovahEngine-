@@ -1,0 +1,13 @@
+[package]
+name = "dovah-esm"
+version = "0.1.0"
+edition = "2021"
+description = "ESM/ESP plugin parser for Dovahengine (Skyrim Special Edition)"
+license = "GPL-3.0-or-later"
+
+[dependencies]
+flate2 = "1"
+
+[dev-dependencies]
+dovah-bsa = { path = "../dovah-bsa" }
+flate2 = "1"

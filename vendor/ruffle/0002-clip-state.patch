@@ -1,0 +1,84 @@
+--- a/core/src/player.rs
++++ b/core/src/player.rs
+@@ -2645,6 +2645,81 @@
+         })
+     }
+ 
++    /// Diagnostic: read a nested clip's runtime state by dotted path
++    /// from the root clip (AVM1 only), e.g. `"HUDMovieBaseInstance.Health"`.
++    ///
++    /// DOVAHENGINE PATCH (M2): the harness cannot read clip properties
++    /// through any public Ruffle API (`call_clip_function` only invokes
++    /// methods, and a method's return value cannot tell a landed call
++    /// from a missing path when the method returns Undefined). This
++    /// reads `_currentframe`, `_totalframes`, `_x`, `_y`, `_visible`,
++    /// `_alpha`, and `text` (TextFields) via the AVM1 object and
++    /// formats them as one line: `path: currentframe=85/170 x=.. y=..
++    /// visible=true alpha=100 text="Riverwood"`, or `path: NOT FOUND`
++    /// if the path does not resolve. AVM2 movies return `NOT FOUND`.
++    pub fn clip_state(&mut self, path: &str) -> String {
++        self.mutate_with_update_context(|context| {
++            if context.root_swf.is_action_script_3() {
++                return format!("{path}: NOT FOUND (avm2)");
++            }
++            let Some(root_clip) = context.stage.root_clip() else {
++                return format!("{path}: NOT FOUND (no root clip)");
++            };
++            let Some(root_obj) = root_clip.object1() else {
++                return format!("{path}: NOT FOUND (no root object)");
++            };
++            let mut activation = Activation::from_nothing(
++                context,
++                ActivationIdentifier::root("[clip_state]"),
++                root_clip,
++            );
++            // Walk the dotted path through the AVM1 object tree, as
++            // in `call_clip_function`.
++            let mut current = root_obj;
++            for segment in path.split('.') {
++                if segment.is_empty() {
++                    continue;
++                }
++                let seg_name = AvmString::new_utf8(activation.gc(), segment);
++                let next = match current.get(seg_name, &mut activation) {
++                    Ok(value) => match value.coerce_to_object(&mut activation) {
++                        Ok(Some(obj)) => obj,
++                        _ => return format!("{path}: NOT FOUND (at '{segment}')"),
++                    },
++                    Err(_) => return format!("{path}: NOT FOUND (at '{segment}')"),
++                };
++                current = next;
++            }
++            let mut parts: Vec<String> = Vec::new();
++            for prop in [
++                "_currentframe",
++                "_totalframes",
++                "_x",
++                "_y",
++                "_visible",
++                "_alpha",
++                "text",
++                // Meter objects (plain AS objects, not clips): the
++                // fill state. Undefined on clips — harmless.
++                "CurrentPercent",
++                "TargetPercent",
++                "Empty",
++                "Full",
++            ] {
++                let name = AvmString::new_utf8(activation.gc(), prop);
++                let rendered = match current.get(name, &mut activation) {
++                    Ok(value) => match value.coerce_to_string(&mut activation) {
++                        Ok(s) => s.to_string(),
++                        Err(_) => "?".to_string(),
++                    },
++                    Err(_) => "?".to_string(),
++                };
++                parts.push(format!("{prop}={rendered}"));
++            }
++            format!("{path}: {}", parts.join(" "))
++        })
++    }
++
+     pub fn spoofed_url(&self) -> Option<&str> {
+         self.spoofed_url.as_deref()
+     }

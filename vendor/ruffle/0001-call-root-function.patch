@@ -1,0 +1,147 @@
+--- /home/hatch/.cargo/git/checkouts/ruffle-b1b568dcb5621339/89a7049/core/src/player.rs	2026-11-16 03:53:04.312368402 +0000
++++ core/src/player.rs	2026-11-16 08:45:52.371438406 +0000
+@@ -5,7 +5,7 @@
+ use crate::avm1::Object;
+ use crate::avm1::Value;
+ use crate::avm1::VariableDumper;
+-use crate::avm1::{Activation, ActivationIdentifier};
++use crate::avm1::{Activation, ActivationIdentifier, ExecutionReason};
+ use crate::avm2::object::EventObject as Avm2EventObject;
+ use crate::avm2::{Activation as Avm2Activation, Avm2, CallStack, SharedObjectObject};
+ use crate::backend::navigator::ErrorResponse;
+@@ -31,7 +31,7 @@
+ use crate::display_object::Avm2MousePick;
+ use crate::display_object::{
+     EditText, GotoInfo, InteractiveObject, Stage, StageAlign, StageDisplayState, StageScaleMode,
+-    StopOrPlay, TInteractiveObject, WindowMode,
++    StopOrPlay, TDisplayObject, TInteractiveObject, WindowMode,
+ };
+ use crate::events::GamepadButton;
+ use crate::events::PlayerNotification;
+@@ -2524,6 +2524,126 @@
+             }
+         })
+     }
++
++    /// Calls a function defined on the root movie clip's timeline
++    /// (AVM1 only), e.g. a frame-1 global such as Skyrim's `InitExtensions`.
++    ///
++    /// DOVAHENGINE PATCH (M1): Ruffle's public API otherwise offers no way
++    /// for the host to invoke a root-timeline function — `call_internal_interface`
++    /// only reaches callbacks the SWF registered via `ExternalInterface.addCallback`,
++    /// and Skyrim's menus register their GameDelegate callbacks *inside*
++    /// `InitExtensions`, which the host cannot invoke. Without this, the
++    /// GameDelegate bridge can never be bootstrapped. AVM2 movies return Null.
++    /// A missing function returns Undefined rather than erroring.
++    pub fn call_root_function(
++        &mut self,
++        name: &str,
++        args: impl IntoIterator<Item = ExternalValue>,
++    ) -> ExternalValue {
++        self.mutate_with_update_context(|context| {
++            if context.root_swf.is_action_script_3() {
++                tracing::warn!("call_root_function is AVM1-only; ignoring call to {name}");
++                return ExternalValue::Null;
++            }
++            let Some(root_clip) = context.stage.root_clip() else {
++                tracing::warn!("call_root_function: no root clip for {name}");
++                return ExternalValue::Null;
++            };
++            let Some(root_obj) = root_clip.object1() else {
++                tracing::warn!("call_root_function: root clip has no AVM1 object for {name}");
++                return ExternalValue::Null;
++            };
++            let mut activation = Activation::from_nothing(
++                context,
++                ActivationIdentifier::root("[call_root_function]"),
++                root_clip,
++            );
++            let avm_args: Vec<Value> = args
++                .into_iter()
++                .map(|v| v.into_avm1(&mut activation))
++                .collect();
++            let avm_name = AvmString::new_utf8(activation.gc(), name);
++            match root_obj.call_method(
++                avm_name,
++                &avm_args,
++                &mut activation,
++                ExecutionReason::Special,
++            ) {
++                Ok(value) => {
++                    ExternalValue::from_avm1(&mut activation, value).unwrap_or(ExternalValue::Null)
++                }
++                Err(_) => ExternalValue::Null,
++            }
++        })
++    }
++
++    /// Calls a method on a nested clip, resolved by dotted path from the
++    /// root clip (AVM1 only), e.g. `("Health", "gotoAndStop", [100])` or
++    /// `("LocationLockBase.LocationNameBase", "gotoAndStop", [85])`.
++    ///
++    /// DOVAHENGINE PATCH (M1): same motivation as `call_root_function` —
++    /// Scaleform's `Invoke` can target a named clip (`HUDMovieBaseInstance
++    /// .RegisterComponents`); stock Ruffle cannot. An empty path calls the
++    /// method on the root clip. A missing clip or method returns Undefined
++    /// rather than erroring.
++    pub fn call_clip_function(
++        &mut self,
++        path: &str,
++        name: &str,
++        args: impl IntoIterator<Item = ExternalValue>,
++    ) -> ExternalValue {
++        self.mutate_with_update_context(|context| {
++            if context.root_swf.is_action_script_3() {
++                tracing::warn!("call_clip_function is AVM1-only; ignoring call to {path}.{name}");
++                return ExternalValue::Null;
++            }
++            let Some(root_clip) = context.stage.root_clip() else {
++                return ExternalValue::Null;
++            };
++            let Some(root_obj) = root_clip.object1() else {
++                return ExternalValue::Null;
++            };
++            let mut activation = Activation::from_nothing(
++                context,
++                ActivationIdentifier::root("[call_clip_function]"),
++                root_clip,
++            );
++            // Walk the dotted path through the AVM1 object tree. A named
++            // child clip reads back as Value::MovieClip; coerce_to_object
++            // resolves it (and plain objects) to the script object.
++            let mut current = root_obj;
++            for segment in path.split('.') {
++                if segment.is_empty() {
++                    continue;
++                }
++                let seg_name = AvmString::new_utf8(activation.gc(), segment);
++                let next = match current.get(seg_name, &mut activation) {
++                    Ok(value) => match value.coerce_to_object(&mut activation) {
++                        Ok(Some(obj)) => obj,
++                        _ => return ExternalValue::Undefined,
++                    },
++                    Err(_) => return ExternalValue::Undefined,
++                };
++                current = next;
++            }
++            let avm_args: Vec<Value> = args
++                .into_iter()
++                .map(|v| v.into_avm1(&mut activation))
++                .collect();
++            let avm_name = AvmString::new_utf8(activation.gc(), name);
++            match current.call_method(
++                avm_name,
++                &avm_args,
++                &mut activation,
++                ExecutionReason::Special,
++            ) {
++                Ok(value) => {
++                    ExternalValue::from_avm1(&mut activation, value).unwrap_or(ExternalValue::Null)
++                }
++                Err(_) => ExternalValue::Null,
++            }
++        })
++    }
+ 
+     pub fn spoofed_url(&self) -> Option<&str> {
+         self.spoofed_url.as_deref()

@@ -1,0 +1,62 @@
+--- a/core/src/player.rs
++++ b/core/src/player.rs
+@@ -2645,6 +2645,59 @@
+         })
+     }
+ 
++    /// Sets a variable on a nested clip, resolved by dotted path from the
++    /// root clip (AVM1 only), e.g. `("InventoryLists_mc.ItemsList",
++    /// "entryList", [...])`.
++    ///
++    /// DOVAHENGINE PATCH (M3): Scaleform's `SetVariable` — the game
++    /// populates the menus' lists by setting `entryList` arrays
++    /// directly on clips, and there is no GameDelegate handler for
++    /// it (the SWF only exposes `InvalidateListData`, which reads
++    /// the array). Stock Ruffle has no public API for this. The
++    /// value converts through `ExternalValue::into_avm1`, so
++    /// objects and lists cross over. Returns `true` if the path
++    /// resolved and the property was set; a missing clip returns
++    /// `false` rather than erroring.
++    pub fn set_clip_variable(&mut self, path: &str, name: &str, value: ExternalValue) -> bool {
++        self.mutate_with_update_context(|context| {
++            if context.root_swf.is_action_script_3() {
++                tracing::warn!("set_clip_variable is AVM1-only; ignoring set of {path}.{name}");
++                return false;
++            }
++            let Some(root_clip) = context.stage.root_clip() else {
++                return false;
++            };
++            let Some(root_obj) = root_clip.object1() else {
++                return false;
++            };
++            let mut activation = Activation::from_nothing(
++                context,
++                ActivationIdentifier::root("[set_clip_variable]"),
++                root_clip,
++            );
++            // Walk the dotted path through the AVM1 object tree, as
++            // in `call_clip_function`.
++            let mut current = root_obj;
++            for segment in path.split('.') {
++                if segment.is_empty() {
++                    continue;
++                }
++                let seg_name = AvmString::new_utf8(activation.gc(), segment);
++                let next = match current.get(seg_name, &mut activation) {
++                    Ok(value) => match value.coerce_to_object(&mut activation) {
++                        Ok(Some(obj)) => obj,
++                        _ => return false,
++                    },
++                    Err(_) => return false,
++                };
++                current = next;
++            }
++            let avm_name = AvmString::new_utf8(activation.gc(), name);
++            let avm_value = value.into_avm1(&mut activation);
++            current.set(avm_name, avm_value, &mut activation).is_ok()
++        })
++    }
++
+     /// Diagnostic: read a nested clip's runtime state by dotted path
+     /// from the root clip (AVM1 only), e.g. `"HUDMovieBaseInstance.Health"`.
+     ///

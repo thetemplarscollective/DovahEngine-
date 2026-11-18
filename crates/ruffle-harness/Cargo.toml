@@ -1,0 +1,49 @@
+[package]
+name = "ruffle-harness"
+version = "0.1.0"
+edition = "2021"
+description = "Standalone Ruffle harness for Dovahengine (M1): renders Skyrim's real Flash UI offscreen from stub game data"
+license = "GPL-3.0-or-later"
+
+[lib]
+name = "ruffle_harness"
+path = "src/lib.rs"
+
+[[bin]]
+name = "ruffle-harness"
+path = "src/main.rs"
+
+[dependencies]
+# Ruffle is NOT on crates.io. Vendored at `vendor/ruffle/` (0.7.1 tag,
+# commit 89a7049965f3090e706265670df309a5128233ac) with ONE Dovahengine
+# patch: `Player::call_root_function` — the public API otherwise cannot
+# invoke a root-timeline function such as the menus' `InitExtensions`,
+# and without it the GameDelegate bridge can never start (see
+# vendor/ruffle/README-DOVAHENGINE.md). License MIT OR Apache-2.0 (clean).
+ruffle_core = { path = "../../vendor/ruffle/core" }
+ruffle_render = { path = "../../vendor/ruffle/render" }
+ruffle_render_wgpu = { path = "../../vendor/ruffle/render/wgpu" }
+# PNG output for the captured frames. Matches Ruffle's own `image`
+# 0.25.10 (workspace Cargo.toml), so cargo builds one copy.
+image = "0.25"
+# Needed to name the `connect_socket` channel types in the
+# NavigatorBackend impl (ruffle_core does not re-export them).
+async-channel = "2"
+# Needed to name the `resolve_url` / `SuccessResponse` types in the
+# NavigatorBackend impl. Both are already in the lockfile via Ruffle.
+url = "2"
+encoding_rs = "0.8"
+# M3 diagnostic: Ruffle logs through `tracing`, and without a
+# subscriber its loader logs (import fetches, preload results, fetch
+# errors) go nowhere. The binary inits a fmt subscriber when
+# `RUST_LOG` is set, so a stalled menu's import chain is visible.
+# Both crates are already in the lockfile via Ruffle.
+tracing = "0.1"
+tracing-subscriber = "0.3"
+# M4: `fonts_en.swf` is CWS (zlib) — the fontlib synthesis
+# decompresses it. Already in the lockfile via the engine (1.1.11).
+flate2 = "1"
+
+[dev-dependencies]
+# Polling the navigator's futures in tests.
+futures = "0.3"

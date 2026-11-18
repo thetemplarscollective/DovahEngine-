@@ -1,0 +1,19 @@
+[workspace]
+members = ["crates/dovah-bsa", "crates/dovah-esm", "crates/dovah-nif", "crates/dovah-dds", "crates/dovah-pex", "crates/dovah-papyrus", "crates/dovah-strings", "crates/dovah-app", "crates/ruffle-harness"]
+# The vendored Ruffle tree is its OWN workspace (its crates inherit
+# edition/version from vendor/ruffle/Cargo.toml). Without this exclude,
+# cargo claims the vendored crates for THIS workspace, whose root defines
+# no workspace.package.edition, and the path deps fail to parse.
+exclude = ["vendor/ruffle"]
+resolver = "2"
+
+# Light-falloff milestone: Bevy 0.20's point-light attenuation is
+# fixed inverse-square (window/d^2) with no per-light override,
+# and Skyrim's falloff is linear (Fade x (1 - d/Radius)). The only
+# way to replace the attenuation is to patch the shader, and the
+# shader lives in bevy_pbr — so bevy_pbr is vendored (exact copy
+# of registry bevy_pbr 0.20.1) with ONE function changed:
+# getDistanceAttenuation in src/render/pbr_lighting.wesl.
+# Revert by deleting this [patch] section and vendor/bevy_pbr.
+[patch.crates-io]
+bevy_pbr = { path = "vendor/bevy_pbr" }

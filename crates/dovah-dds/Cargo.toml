@@ -1,0 +1,16 @@
+[package]
+name = "dovah-dds"
+version = "0.1.0"
+edition = "2021"
+description = "DDS texture reader for Dovahengine (Skyrim Special Edition)"
+license = "GPL-3.0-or-later"
+
+[dependencies]
+# Block-compression decoding (BC1-BC7): pure Rust, zero dependencies,
+# no unsafe, implemented from Microsoft's D3D10/11 docs and the
+# Khronos Data Format Spec. See docs/formats/dds.md for the rationale.
+bcn-decode = "0.1"
+
+[dev-dependencies]
+# Only for the dds_bsa_sample example (real-data check).
+dovah-bsa = { path = "../dovah-bsa" }

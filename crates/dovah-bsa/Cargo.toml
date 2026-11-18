@@ -1,0 +1,14 @@
+[package]
+name = "dovah-bsa"
+version = "0.1.0"
+edition = "2021"
+description = "BSA archive reader for Dovahengine (Skyrim LE v104 / Skyrim SE v105)"
+license = "GPL-3.0-or-later"
+
+[dependencies]
+flate2 = "1"
+lz4_flex = "0.11"
+
+[dev-dependencies]
+flate2 = "1"
+lz4_flex = "0.11"
