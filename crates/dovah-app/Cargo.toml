@@ -1,0 +1,111 @@
+[package]
+name = "dovah-app"
+version = "0.4.13"
+edition = "2021"
+description = "Dovahengine renderer: load a Skyrim cell and walk in it (Bevy app)"
+
+# M8: cargo-apk builds a cdylib (a bare binary cannot be packaged).
+# The rlib lets the desktop binary link the same code.
+[lib]
+name = "dovah_app"
+path = "src/lib.rs"
+crate-type = ["cdylib", "rlib"]
+
+[[bin]]
+name = "dovah-app"
+path = "src/main.rs"
+
+[dependencies]
+# android-native-activity: the Android entry point uses
+# android.app.NativeActivity (no extra AARs). Inert on desktop.
+bevy = { version = "0.20", features = ["android-native-activity"] }
+dovah-bsa = { path = "../dovah-bsa" }
+dovah-esm = { path = "../dovah-esm" }
+dovah-nif = { path = "../dovah-nif" }
+dovah-dds = { path = "../dovah-dds" }
+dovah-pex = { path = "../dovah-pex" }
+dovah-papyrus = { path = "../dovah-papyrus" }
+dovah-strings = { path = "../dovah-strings" }
+
+# UI milestone 1: save files are JSON (serde_json is already in
+# the lockfile via Bevy's tree — no new download).
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# Ruffle M4: the real Skyrim HUD runs on the vendored Ruffle player
+# (see crates/ruffle-harness/ + vendor/ruffle/README-DOVAHENGINE.md).
+# The harness is the engine's only Ruffle dependency — the provider,
+# navigator, and runner live there, not in a second copy here.
+ruffle-harness = { path = "../ruffle-harness" }
+# The HUD capture is an `image::RgbaImage` (the mailbox type). Already
+# in the lockfile via Ruffle (0.25.10) — no new download.
+image = "0.25"
+
+# Map-bake fix: the ignored real-ESM timing test measures the
+# baker's per-step THREAD CPU time (libc::clock_gettime,
+# CLOCK_THREAD_CPUTIME_ID) — wall time is meaningless on this
+# shared box (a concurrent link/render deschedules the test
+# for 10s of ms), but CPU time is the work bound. Dev-only:
+# never ships in the APK.
+[dev-dependencies]
+libc = "0.2"
+
+# M8.1: immersive fullscreen on Android needs the activity object
+# (android-activity, already in the tree via Bevy) and a JNI call to
+# View.setSystemUiVisibility (jni, also already in the tree).
+[target.'cfg(target_os = "android")'.dependencies]
+android-activity = "0.6"
+jni = "0.21"
+
+# M8: cargo-apk config for the Inn Test APK. Build with:
+#   cargo apk build --lib
+# (the --lib matters: a bin artifact cannot be a cdylib).
+[package.metadata.android]
+package = "com.dovahengine.inntest"
+build_targets = ["aarch64-linux-android"]
+apk_name = "dovahengine-inn-test"
+# Dylan's own UI art, packaged into the APK's assets. No Bethesda
+# data is ever bundled — the game files stay on the phone.
+assets = "assets"
+# M15 show build: Android resources (the launcher icon mipmap
+# variants). cargo-apk passes this to aapt as -S; without it the
+# @mipmap/ic_launcher reference below has nothing to resolve to
+# and aapt fails ("No resource found"). The key is `resources`
+# in this cargo-apk version — the old docs' `res` is silently
+# IGNORED (proven by the failed v0.4.4 build attempt: aapt got no
+# -S flag). The variants are generated from icon.png (the 512x512
+# titled-logo master) — regenerate them if it changes.
+resources = "android_res"
+
+# Strip debug symbols from the .so before packaging: an unstripped
+# debug Bevy .so is ~1.7 GB, which also overflows /tmp when apksigner
+# copies the APK to sign it. Stripped it is ~100 MB.
+strip = "strip"
+
+# Read Skyrim.esm from Downloads: needs All Files Access on
+# Android 11+. The user grants it in Settings (see android.rs).
+[[package.metadata.android.uses_permission]]
+name = "android.permission.MANAGE_EXTERNAL_STORAGE"
+
+[[package.metadata.android.uses_permission]]
+name = "android.permission.READ_EXTERNAL_STORAGE"
+max_sdk_version = 32
+
+[package.metadata.android.sdk]
+min_sdk_version = 26
+target_sdk_version = 34
+
+[package.metadata.android.application]
+label = "Dovahengine Inn Test"
+# M15 show build: Dylan's picked TITLED logo (dragon sigil +
+# "DOVAHENGINE" text) as the APK icon. This is a RESOURCE
+# REFERENCE, not a file — cargo-apk writes it verbatim into the
+# manifest's android:icon, so a filename here fails aapt ("String
+# types not allowed"). The actual PNGs live in android_res/
+# (see `res` above). Verify with `aapt dump badging` after the
+# build (application-icon lines). The sigil-only version is NOT
+# the pick — do not swap it in.
+icon = "@mipmap/ic_launcher"
+
+[package.metadata.android.application.activity]
+orientation = "landscape"
